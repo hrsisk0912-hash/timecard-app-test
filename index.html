@@ -239,11 +239,25 @@
     <div class="field"><label>氏名</label><input type="text" id="staffEditName"></div>
     <div class="field">
       <label>雇用形態</label>
-      <select id="staffEditType"><option value="時給">時給</option><option value="月給">月給</option></select>
+      <select id="staffEditType" onchange="syncStaffTypeFields()">
+        <option value="アルバイト">アルバイト</option>
+        <option value="パート">パート</option>
+        <option value="正社員">正社員</option>
+        <option value="契約社員">契約社員</option>
+      </select>
     </div>
-    <div class="field"><label>時給</label><input type="number" id="staffEditHourly"></div>
-    <div class="field"><label>月給</label><input type="number" id="staffEditMonthly"></div>
-    <div class="field"><label>交通費（1出勤あたり）</label><input type="number" id="staffEditTransport" placeholder="例：500"></div>
+    <div class="field" id="staffHourlyField"><label>時給</label><input type="number" id="staffEditHourly"></div>
+    <div class="field" id="staffMonthlyField" style="display:none;"><label>月給</label><input type="number" id="staffEditMonthly"></div>
+    <div class="field">
+      <label>交通費タイプ</label>
+      <select id="staffEditTransportType" onchange="syncTransportFields()">
+        <option value="daily">日額（出勤日ごとに加算）</option>
+        <option value="monthly">定期代（月1回・全額）</option>
+      </select>
+    </div>
+    <div class="field" id="transportDailyField"><label>交通費（1出勤あたり）</label><input type="number" id="staffEditTransport" placeholder="例：500"></div>
+    <div class="field" id="transportMonthlyField" style="display:none;"><label>定期代（月額）</label><input type="number" id="staffEditCommuteFee" placeholder="例：10000"></div>
+    <div class="field"><label>備考</label><input type="text" id="staffEditNote" placeholder="任意"></div>
     <div class="row-flex">
       <button class="btn btn-in" id="btnSaveStaff">保存</button>
       <button class="btn btn-secondary" id="btnDeleteStaff">削除</button>
@@ -342,18 +356,15 @@ async function init() {
 function renderStaffGrid() {
   const grid = document.getElementById('staffGrid');
   grid.innerHTML = '';
-  state.staff
-    .filter(s => s['有効'] !== false)
-    .sort((a, b) => (a['表示順'] || 999) - (b['表示順'] || 999))
-    .forEach(s => {
-      const isWorking = state.todayLog.some(r => r['スタッフID'] === s['スタッフID'] && !r['退勤時刻']);
+  state.staff.forEach(s => {
+      const isWorking = state.todayLog.some(r => r['スタッフID'] === s['ID'] && !r['退勤時刻']);
       const chip = document.createElement('div');
       chip.className = 'staff-chip' + (isWorking ? ' working' : '');
-      chip.dataset.staffId = s['スタッフID'];
+      chip.dataset.staffId = s['ID'];
       chip.innerHTML = `${s['氏名']}<span class="status-dot">${isWorking ? '● 出勤中' : '未出勤'}</span>`;
-      chip.addEventListener('click', () => selectStaff(s['スタッフID']));
+      chip.addEventListener('click', () => selectStaff(s['ID']));
       grid.appendChild(chip);
-    });
+  });
 }
 
 function selectStaff(staffId) {
@@ -361,7 +372,7 @@ function selectStaff(staffId) {
   document.querySelectorAll('.staff-chip').forEach(c => {
     c.classList.toggle('selected', c.dataset.staffId === staffId);
   });
-  const s = state.staff.find(x => x['スタッフID'] === staffId);
+  const s = state.staff.find(x => x['ID'] === staffId);
   const isWorking = state.todayLog.some(r => r['スタッフID'] === staffId && !r['退勤時刻']);
 
   document.getElementById('selectedStaffName').textContent = s ? s['氏名'] : '未選択';
@@ -486,7 +497,7 @@ async function loadSummary(month) {
   wrap.innerHTML = data.records.map(r => `
     <div class="record-row">
       <span class="rname">${r['氏名']}<br><span class="rtime">${r['出勤日数']}日 / ${Math.round(r['総労働時間_分']/60*10)/10}h</span></span>
-      <span class="rtime">人件費¥${r['概算人件費']}<br>交通費¥${r['交通費合計']}<br><b>計¥${r['給与合計']}</b></span>
+      <span class="rtime">基本給¥${r['基本給']}<br>交通費¥${r['交通費合計']}<br><b>計¥${r['支給総額']}</b></span>
     </div>
   `).join('');
 }
@@ -498,8 +509,16 @@ document.getElementById('btnExportCsv').addEventListener('click', async () => {
     showToast('出力するデータがありません');
     return;
   }
-  const header = ['年月', 'スタッフID', '氏名', '出勤日数', '総労働時間_分', '概算人件費', '交通費合計', '給与合計'];
-  const rows = data.records.map(r => header.map(h => r[h]).join(','));
+  // 給与計算ソフト向けフォーマット
+  const header = ['スタッフ名', '出勤日数', '合計労働時間', '基本給', '交通費合計', '支給総額'];
+  const rows = data.records.map(r => [
+    r['氏名'],
+    r['出勤日数'],
+    Math.round(r['総労働時間_分'] / 60 * 100) / 100,
+    r['基本給'],
+    r['交通費合計'],
+    r['支給総額'],
+  ].join(','));
   const csv = '\uFEFF' + [header.join(','), ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a');
@@ -538,23 +557,48 @@ function renderStaffList() {
     wrap.innerHTML = '<div class="empty-state">スタッフが登録されていません</div>';
     return;
   }
-  wrap.innerHTML = state.staff.map(s => `
-    <div class="record-row" data-staff-id="${s['スタッフID']}" onclick="openStaffModal(this)" style="cursor:pointer;">
+  wrap.innerHTML = state.staff.map(s => {
+    const isMonthly = s['雇用形態'] === '正社員' || s['雇用形態'] === '契約社員';
+    const wage = isMonthly ? `月給¥${s['月給']}` : `時給¥${s['時給']}`;
+    const transport = s['交通費タイプ'] === 'monthly'
+      ? `定期代¥${s['定期代'] || 0}（月1回）`
+      : `交通費¥${s['交通費'] || 0}（日額）`;
+    return `
+    <div class="record-row" data-staff-id="${s['ID']}" onclick="openStaffModal(this)" style="cursor:pointer;">
       <span class="rname">${s['氏名']}</span>
-      <span class="rtime">${s['雇用形態']}${s['雇用形態'] === '時給' ? '（¥' + s['時給'] + '）' : ''} ・交通費¥${s['交通費'] || 0}</span>
+      <span class="rtime">${s['雇用形態']}・${wage}・${transport}</span>
     </div>
-  `).join('');
+  `;
+  }).join('');
+}
+
+function syncStaffTypeFields() {
+  const t = document.getElementById('staffEditType').value;
+  const isMonthly = t === '正社員' || t === '契約社員';
+  document.getElementById('staffHourlyField').style.display = isMonthly ? 'none' : '';
+  document.getElementById('staffMonthlyField').style.display = isMonthly ? '' : 'none';
+}
+
+function syncTransportFields() {
+  const t = document.getElementById('staffEditTransportType').value;
+  document.getElementById('transportDailyField').style.display = t === 'monthly' ? 'none' : '';
+  document.getElementById('transportMonthlyField').style.display = t === 'monthly' ? '' : 'none';
 }
 
 window.openStaffModal = function(el) {
   const staffId = el.dataset.staffId;
-  const s = state.staff.find(x => x['スタッフID'] === staffId) || {};
+  const s = state.staff.find(x => x['ID'] === staffId) || {};
   state.editingStaffId = staffId || null;
   document.getElementById('staffEditName').value = s['氏名'] || '';
-  document.getElementById('staffEditType').value = s['雇用形態'] || '時給';
+  document.getElementById('staffEditType').value = s['雇用形態'] || 'アルバイト';
   document.getElementById('staffEditHourly').value = s['時給'] || '';
   document.getElementById('staffEditMonthly').value = s['月給'] || '';
+  document.getElementById('staffEditTransportType').value = s['交通費タイプ'] || 'daily';
   document.getElementById('staffEditTransport').value = s['交通費'] || '';
+  document.getElementById('staffEditCommuteFee').value = s['定期代'] || '';
+  document.getElementById('staffEditNote').value = s['備考'] || '';
+  syncStaffTypeFields();
+  syncTransportFields();
   document.getElementById('btnDeleteStaff').style.display = staffId ? '' : 'none';
   document.getElementById('staffModal').classList.add('open');
 };
@@ -562,22 +606,30 @@ window.openStaffModal = function(el) {
 document.getElementById('btnAddStaff').addEventListener('click', () => {
   state.editingStaffId = null;
   document.getElementById('staffEditName').value = '';
-  document.getElementById('staffEditType').value = '時給';
+  document.getElementById('staffEditType').value = 'アルバイト';
   document.getElementById('staffEditHourly').value = '';
   document.getElementById('staffEditMonthly').value = '';
+  document.getElementById('staffEditTransportType').value = 'daily';
   document.getElementById('staffEditTransport').value = '';
+  document.getElementById('staffEditCommuteFee').value = '';
+  document.getElementById('staffEditNote').value = '';
+  syncStaffTypeFields();
+  syncTransportFields();
   document.getElementById('btnDeleteStaff').style.display = 'none';
   document.getElementById('staffModal').classList.add('open');
 });
 
 document.getElementById('btnSaveStaff').addEventListener('click', async () => {
   const staff = {
-    'スタッフID': state.editingStaffId || '',
+    'ID': state.editingStaffId || '',
     '氏名': document.getElementById('staffEditName').value,
     '雇用形態': document.getElementById('staffEditType').value,
     '時給': document.getElementById('staffEditHourly').value,
     '月給': document.getElementById('staffEditMonthly').value,
+    '交通費タイプ': document.getElementById('staffEditTransportType').value,
     '交通費': document.getElementById('staffEditTransport').value,
+    '定期代': document.getElementById('staffEditCommuteFee').value,
+    '備考': document.getElementById('staffEditNote').value,
   };
   const res = await apiPost('saveStaff', { staff });
   if (res.success) {
