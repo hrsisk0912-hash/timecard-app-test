@@ -13,11 +13,36 @@
     --text:#F2F2F7; --text2:#AEAEB2; --text3:#636366;
     --radius: 14px;
   }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
   body {
     margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
     background: var(--bg); color: var(--text); padding-bottom: 76px;
   }
+
+  /* ---------- グローバルローディングバー ---------- */
+  #loadingBar {
+    position: fixed; top: 0; left: 0; height: 3px; width: 100%; z-index: 100;
+    background: transparent; overflow: hidden; opacity: 0; transition: opacity .2s;
+  }
+  #loadingBar.active { opacity: 1; }
+  #loadingBar .sweep {
+    position: absolute; top: 0; left: -30%; height: 100%; width: 30%;
+    background: linear-gradient(90deg, transparent, var(--primary), var(--primary2), transparent);
+    animation: sweep 1s linear infinite;
+  }
+  @keyframes sweep {
+    0% { left: -30%; }
+    100% { left: 100%; }
+  }
+
+  /* ---------- スピナー ---------- */
+  .spinner {
+    display: inline-block; width: 16px; height: 16px; border-radius: 50%;
+    border: 2.5px solid rgba(255,255,255,.35); border-top-color: #fff;
+    animation: spin .7s linear infinite; vertical-align: middle;
+  }
+  .spinner.dark { border-color: rgba(0,0,0,.15); border-top-color: var(--primary); }
+  @keyframes spin { to { transform: rotate(360deg); } }
   header {
     background: var(--surface); border-bottom: 1px solid var(--border);
     padding: 18px 16px 14px; position: sticky; top: 0; z-index: 10;
@@ -53,10 +78,10 @@
   .staff-chip {
     padding: 14px 6px; border-radius: 12px; border: 1.5px solid var(--border);
     background: var(--surface2); text-align: center; font-size: 13px; font-weight: 600;
-    color: var(--text); transition: transform .15s, background .15s, border-color .15s;
+    color: var(--text); transition: transform .1s ease, background .15s, border-color .15s, filter .1s;
   }
   .staff-chip.selected { border-color: var(--primary); background: var(--primary-dim); }
-  .staff-chip.btn-pressed { transform: scale(0.95); }
+  .staff-chip.btn-pressed, .staff-chip:active { transform: scale(0.92); filter: brightness(0.85); }
   .staff-chip .status-dot { display: block; font-size: 10px; color: var(--text3); margin-top: 4px; font-weight: 400; }
   .staff-chip.working .status-dot { color: var(--green); }
 
@@ -65,16 +90,21 @@
   .clock-status .state { font-size: 13px; color: var(--text2); margin-top: 4px; }
 
   .btn { border: none; border-radius: 12px; padding: 16px; font-size: 16px; font-weight: 700;
-    width: 100%; cursor: pointer; transition: transform .15s, filter .15s; }
-  .btn.btn-pressed { transform: scale(0.96); filter: brightness(0.9); }
+    width: 100%; cursor: pointer; transition: transform .1s ease, filter .1s, box-shadow .1s;
+    display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .btn.btn-pressed, .btn:active:not(:disabled) { transform: scale(0.94); filter: brightness(0.8); box-shadow: inset 0 2px 6px rgba(0,0,0,.25); }
   .btn-in { background: var(--green); color: #fff; }
   .btn-out { background: var(--red); color: #fff; }
   .btn-secondary { background: var(--surface2); border: 1.5px solid var(--border2); color: var(--text); }
   .btn-small { padding: 8px 14px; font-size: 13px; border-radius: 10px; width: auto; }
-  .btn:disabled { opacity: 0.35; }
+  .btn:disabled { opacity: 0.35; pointer-events: none; }
+  .btn.is-loading { pointer-events: none; opacity: 0.85; }
+
+  .tappable { cursor: pointer; transition: transform .1s ease, filter .1s, background .12s; }
+  .tappable.btn-pressed, .tappable:active { transform: scale(0.97); filter: brightness(0.8); background: var(--surface3); }
 
   .record-row { display: flex; justify-content: space-between; align-items: center;
-    padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+    padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; border-radius: 8px; }
   .record-row:last-child { border-bottom: none; }
   .record-row .rname { font-weight: 600; color: var(--text); }
   .record-row .rtime { color: var(--text2); }
@@ -97,7 +127,9 @@
   nav.tabbar button {
     flex: 1; border: none; background: none; padding: 10px 0 8px; font-size: 11px;
     color: var(--text3); display: flex; flex-direction: column; align-items: center; gap: 2px;
+    transition: transform .1s ease, opacity .1s;
   }
+  nav.tabbar button.btn-pressed, nav.tabbar button:active { transform: scale(0.88); opacity: 0.7; }
   nav.tabbar button .icon { font-size: 20px; }
   nav.tabbar button.active { color: var(--primary); font-weight: 700; }
 
@@ -124,6 +156,8 @@
 </style>
 </head>
 <body>
+
+<div id="loadingBar"><div class="sweep"></div></div>
 
 <header>
   <h1 id="storeName">タイムカード</h1>
@@ -221,6 +255,10 @@
   <div class="modal-sheet">
     <h3>打刻を修正</h3>
     <div class="field"><label>氏名</label><div id="editStaffName" style="font-weight:700;"></div></div>
+    <div class="field">
+      <label>ステータス</label>
+      <div><span class="badge" id="editStatusBadge">-</span></div>
+    </div>
     <div class="field"><label>出勤時刻</label><input type="time" id="editIn"></div>
     <div class="field"><label>退勤時刻</label><input type="time" id="editOut"></div>
     <div class="field"><label>休憩分</label><input type="number" id="editBreak"></div>
@@ -229,6 +267,8 @@
       <button class="btn btn-in" id="btnSaveEdit">保存</button>
       <button class="btn btn-secondary" id="btnCancelEdit">閉じる</button>
     </div>
+    <div style="height:8px"></div>
+    <button class="btn btn-secondary" id="btnApproveRecord">✓ 承認する</button>
   </div>
 </div>
 
@@ -280,18 +320,53 @@ let state = {
 };
 
 // ---------- API呼び出し ----------
+let pendingRequests = 0;
+function showLoadingBar() {
+  pendingRequests++;
+  document.getElementById('loadingBar').classList.add('active');
+}
+function hideLoadingBar() {
+  pendingRequests = Math.max(0, pendingRequests - 1);
+  if (pendingRequests === 0) document.getElementById('loadingBar').classList.remove('active');
+}
+
 async function apiGet(action, params = {}) {
-  const qs = new URLSearchParams({ action, ...params }).toString();
-  const res = await fetch(`${API_URL}?${qs}`);
-  return res.json();
+  showLoadingBar();
+  try {
+    const qs = new URLSearchParams({ action, ...params }).toString();
+    const res = await fetch(`${API_URL}?${qs}`);
+    return await res.json();
+  } finally {
+    hideLoadingBar();
+  }
 }
 async function apiPost(action, payload = {}) {
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, ...payload })
-  });
-  return res.json();
+  showLoadingBar();
+  try {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, ...payload })
+    });
+    return await res.json();
+  } finally {
+    hideLoadingBar();
+  }
+}
+
+// ---------- ボタンの読み込み中表示 ----------
+function setButtonLoading(btn, isLoading, loadingLabel) {
+  if (!btn) return;
+  if (isLoading) {
+    btn.dataset.originalHtml = btn.innerHTML;
+    btn.innerHTML = `<span class="spinner"></span>${loadingLabel ? loadingLabel : ''}`;
+    btn.classList.add('is-loading');
+    btn.disabled = true;
+  } else {
+    if (btn.dataset.originalHtml) btn.innerHTML = btn.dataset.originalHtml;
+    btn.classList.remove('is-loading');
+    btn.disabled = false;
+  }
 }
 
 function showToast(msg) {
@@ -314,7 +389,7 @@ document.querySelectorAll('nav.tabbar button').forEach(btn => {
 
 // ---------- タップフィードバック（:active非対応端末向け） ----------
 document.addEventListener('touchstart', function(e) {
-  const el = e.target.closest('.btn, .staff-chip');
+  const el = e.target.closest('.btn, .staff-chip, .tappable, nav.tabbar button');
   if (el) {
     el.classList.add('btn-pressed');
     setTimeout(() => el.classList.remove('btn-pressed'), 200);
@@ -384,30 +459,30 @@ function selectStaff(staffId) {
 document.getElementById('btnClockIn').addEventListener('click', async () => {
   if (!state.selectedStaffId) return;
   const btn = document.getElementById('btnClockIn');
-  btn.disabled = true;
+  setButtonLoading(btn, true, '出勤処理中…');
   const res = await apiPost('clockIn', { staffId: state.selectedStaffId });
+  setButtonLoading(btn, false);
   if (res.success) {
     showToast('出勤しました ' + res.time);
     await init();
     selectStaff(state.selectedStaffId);
   } else {
     showToast(res.error || '失敗しました');
-    btn.disabled = false;
   }
 });
 
 document.getElementById('btnClockOut').addEventListener('click', async () => {
   if (!state.selectedStaffId) return;
   const btn = document.getElementById('btnClockOut');
-  btn.disabled = true;
+  setButtonLoading(btn, true, '退勤処理中…');
   const res = await apiPost('clockOut', { staffId: state.selectedStaffId });
+  setButtonLoading(btn, false);
   if (res.success) {
     showToast('退勤しました ' + res.time);
     await init();
     selectStaff(state.selectedStaffId);
   } else {
     showToast(res.error || '失敗しました');
-    btn.disabled = false;
   }
 });
 
@@ -438,7 +513,7 @@ async function loadAdminDate() {
     return;
   }
   wrap.innerHTML = data.records.map(r => `
-    <div class="record-row" data-record='${JSON.stringify(r).replace(/'/g, "&apos;")}' onclick="openEditModal(this)" style="cursor:pointer;">
+    <div class="record-row tappable" data-record='${JSON.stringify(r).replace(/'/g, "&apos;")}' onclick="openEditModal(this)" style="cursor:pointer;">
       <span class="rname">${r['氏名']}<br><span class="rtime">${r['出勤時刻'] || '--:--'} 〜 ${r['退勤時刻'] || '--:--'}</span></span>
       <span class="badge ${r['ステータス'] === '承認済み' ? 'approved' : 'pending'}">${r['ステータス']}</span>
     </div>
@@ -453,6 +528,13 @@ window.openEditModal = function(el) {
   document.getElementById('editOut').value = r['退勤時刻'] || '';
   document.getElementById('editBreak').value = r['休憩分'] || 0;
   document.getElementById('editNote').value = r['備考'] || '';
+
+  const isApproved = r['ステータス'] === '承認済み';
+  const badge = document.getElementById('editStatusBadge');
+  badge.textContent = r['ステータス'] || '未承認';
+  badge.className = 'badge ' + (isApproved ? 'approved' : 'pending');
+  document.getElementById('btnApproveRecord').style.display = isApproved ? 'none' : '';
+
   document.getElementById('editModal').classList.add('open');
 };
 
@@ -460,13 +542,31 @@ document.getElementById('btnCancelEdit').addEventListener('click', () => {
   document.getElementById('editModal').classList.remove('open');
 });
 
+document.getElementById('btnApproveRecord').addEventListener('click', async () => {
+  const btn = document.getElementById('btnApproveRecord');
+  const r = JSON.parse(document.getElementById('editModal').dataset.record);
+  setButtonLoading(btn, true, '承認中…');
+  const res = await apiPost('approveRecord', { id: r.ID });
+  setButtonLoading(btn, false);
+  if (res.success) {
+    showToast('承認しました');
+    document.getElementById('editModal').classList.remove('open');
+    loadAdminDate();
+  } else {
+    showToast(res.error || '失敗しました');
+  }
+});
+
 document.getElementById('btnSaveEdit').addEventListener('click', async () => {
+  const btn = document.getElementById('btnSaveEdit');
   const r = JSON.parse(document.getElementById('editModal').dataset.record);
   r['出勤時刻'] = document.getElementById('editIn').value;
   r['退勤時刻'] = document.getElementById('editOut').value;
   r['休憩分'] = document.getElementById('editBreak').value;
   r['備考'] = document.getElementById('editNote').value;
+  setButtonLoading(btn, true, '保存中…');
   const res = await apiPost('saveRecord', { record: r });
+  setButtonLoading(btn, false);
   if (res.success) {
     showToast('保存しました');
     document.getElementById('editModal').classList.remove('open');
@@ -477,8 +577,11 @@ document.getElementById('btnSaveEdit').addEventListener('click', async () => {
 });
 
 document.getElementById('btnAggregate').addEventListener('click', async () => {
+  const btn = document.getElementById('btnAggregate');
   const month = document.getElementById('summaryMonth').value;
+  setButtonLoading(btn, true, '集計中…');
   const res = await apiPost('aggregateMonth', { month });
+  setButtonLoading(btn, false);
   if (res.success) {
     showToast(`${res.staffCount}名分を集計しました`);
     loadSummary(month);
@@ -536,13 +639,16 @@ function fillConfigForm() {
 }
 
 document.getElementById('btnSaveConfig').addEventListener('click', async () => {
+  const btn = document.getElementById('btnSaveConfig');
   const config = {
     '店舗名': document.getElementById('cfgStoreName').value,
     '標準休憩分': document.getElementById('cfgBreakMin').value,
     '勤怠連携モード': document.getElementById('cfgLinkMode').value,
     '連携GAS_URL': document.getElementById('cfgLinkUrl').value,
   };
+  setButtonLoading(btn, true, '保存中…');
   const res = await apiPost('saveConfig', { config });
+  setButtonLoading(btn, false);
   if (res.success) {
     showToast('設定を保存しました');
     init();
@@ -564,7 +670,7 @@ function renderStaffList() {
       ? `定期代¥${s['定期代'] || 0}（月1回）`
       : `交通費¥${s['交通費'] || 0}（日額）`;
     return `
-    <div class="record-row" data-staff-id="${s['ID']}" onclick="openStaffModal(this)" style="cursor:pointer;">
+    <div class="record-row tappable" data-staff-id="${s['ID']}" onclick="openStaffModal(this)" style="cursor:pointer;">
       <span class="rname">${s['氏名']}</span>
       <span class="rtime">${s['雇用形態']}・${wage}・${transport}</span>
     </div>
@@ -620,6 +726,7 @@ document.getElementById('btnAddStaff').addEventListener('click', () => {
 });
 
 document.getElementById('btnSaveStaff').addEventListener('click', async () => {
+  const btn = document.getElementById('btnSaveStaff');
   const staff = {
     'ID': state.editingStaffId || '',
     '氏名': document.getElementById('staffEditName').value,
@@ -631,7 +738,9 @@ document.getElementById('btnSaveStaff').addEventListener('click', async () => {
     '定期代': document.getElementById('staffEditCommuteFee').value,
     '備考': document.getElementById('staffEditNote').value,
   };
+  setButtonLoading(btn, true, '保存中…');
   const res = await apiPost('saveStaff', { staff });
+  setButtonLoading(btn, false);
   if (res.success) {
     showToast('保存しました');
     document.getElementById('staffModal').classList.remove('open');
@@ -644,7 +753,10 @@ document.getElementById('btnSaveStaff').addEventListener('click', async () => {
 document.getElementById('btnDeleteStaff').addEventListener('click', async () => {
   if (!state.editingStaffId) return;
   if (!confirm('このスタッフを削除しますか？')) return;
+  const btn = document.getElementById('btnDeleteStaff');
+  setButtonLoading(btn, true, '削除中…');
   const res = await apiPost('deleteStaff', { staffId: state.editingStaffId });
+  setButtonLoading(btn, false);
   if (res.success) {
     showToast('削除しました');
     document.getElementById('staffModal').classList.remove('open');
