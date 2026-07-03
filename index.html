@@ -196,6 +196,9 @@
       <button class="btn btn-in" id="btnClockIn" disabled>出勤する</button>
       <div style="height:8px"></div>
       <button class="btn btn-out" id="btnClockOut" disabled>退勤する</button>
+      <div style="height:8px"></div>
+      <button class="btn btn-secondary" id="btnBreakStart" style="display:none;">☕ 休憩に入る</button>
+      <button class="btn btn-secondary" id="btnBreakEnd" style="display:none; border-color:var(--yellow); color:var(--yellow);">▶ 休憩から戻る</button>
     </div>
 
     <div class="card">
@@ -244,7 +247,7 @@
     <div class="card">
       <h2>店舗設定</h2>
       <div class="field"><label>店舗名</label><input type="text" id="cfgStoreName"></div>
-      <div class="field"><label>標準休憩分</label><input type="number" id="cfgBreakMin"></div>
+      <div class="field"><label>標準休憩分（休憩打刻がなかった日のフォールバック用）</label><input type="number" id="cfgBreakMin"></div>
       <div class="field">
         <label>給与計算の締め日（集計期間に反映されます）</label>
         <select id="cfgClosingDay">
@@ -310,7 +313,7 @@
     <div class="field"><label>氏名</label><div id="editStaffName" style="font-weight:700;"></div></div>
     <div class="field">
       <label>ステータス</label>
-      <div><span class="badge" id="editStatusBadge">-</span></div>
+      <div><span class="badge" id="editStatusBadge">-</span> <span class="badge" id="editBreakCheckBadge" style="display:none; background:rgba(255,159,10,.15); color:var(--yellow);">⚠ 休憩不足の可能性</span></div>
     </div>
     <div class="field"><label>出勤時刻</label><input type="time" id="editIn"></div>
     <div class="field"><label>退勤時刻</label><input type="time" id="editOut"></div>
@@ -418,7 +421,7 @@
 <script>
 /* ============ 設定：GAS Web APIのデプロイURLと、設定シートのAPIキーに差し替えてください ============ */
 const API_URL = 'https://script.google.com/macros/s/AKfycbx18NvBWyUOGY829l4nnyaAKq1slZbXBfMNrDRoig9FNaqlWhdE8l-aOKXQsuq6wB1o/exec';
-const API_KEY = 'c1ea5e35-5972-4263-80c0-267e68d2ee6f'; // スプレッドシートの「設定」シート → APIキー の値をコピー
+const API_KEY = '290cd680-0e63-40e3-b9a8-6e8d38639ab0'; // スプレッドシートの「設定」シート → APIキー の値をコピー
 
 let state = {
   staff: [],
@@ -450,8 +453,10 @@ function setSyncing(st) {
 async function apiGet(action, params = {}) {
   showLoadingBar(); setSyncing('syncing');
   try {
-    const qs = new URLSearchParams({ action, key: API_KEY, ...params }).toString();
-    const res = await fetch(`${API_URL}?${qs}`);
+    // _t：キャッシュバスター。GAS Web Appの中継URL（echo）が古い/無効な内容を
+    // 返してしまう問題を避けるため、リクエストを毎回ユニークにする。
+    const qs = new URLSearchParams({ action, key: API_KEY, _t: Date.now(), ...params }).toString();
+    const res = await fetch(`${API_URL}?${qs}`, { cache: 'no-store' });
     const json = await res.json();
     setSyncing(json && json.success === false ? 'error' : 'ok');
     return json;
@@ -468,7 +473,8 @@ async function apiPost(action, payload = {}) {
     const res = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, key: API_KEY, ...payload })
+      body: JSON.stringify({ action, key: API_KEY, ...payload }),
+      cache: 'no-store'
     });
     const json = await res.json();
     setSyncing(json && json.success === false ? 'error' : 'ok');
@@ -525,7 +531,13 @@ function switchToTab_(btn) {
   document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('page-' + btn.dataset.tab).classList.add('active');
-  if (btn.dataset.tab === 'admin') { loadAdminDate(); loadAlerts(); }
+  if (btn.dataset.tab === 'admin') { loadAdminAndAlerts_(); }
+}
+
+// 管理タブ表示時の通信をGASへの同時アクセスを避けるため順番に実行する
+async function loadAdminAndAlerts_() {
+  await loadAdminDate();
+  await loadAlerts();
 }
 
 document.getElementById('btnCancelPin').addEventListener('click', () => {
@@ -585,6 +597,7 @@ async function init() {
   state.config = data.config || {};
   state.todayLog = data.todayLog || [];
   state.leaveBalances = data.leaveBalances || {};
+  state.openBreakStaffIds = data.openBreakStaffIds || [];
 
   document.getElementById('storeName').textContent = state.config['店舗名'] || 'タイムカード';
   renderStaffGrid();
@@ -623,11 +636,15 @@ function selectStaff(staffId) {
   });
   const s = state.staff.find(x => x['ID'] === staffId);
   const isWorking = state.todayLog.some(r => r['スタッフID'] === staffId && !r['退勤時刻']);
+  const isOnBreak = (state.openBreakStaffIds || []).includes(staffId);
 
   document.getElementById('selectedStaffName').textContent = s ? s['氏名'] : '未選択';
-  document.getElementById('selectedStaffState').textContent = isWorking ? '出勤中' : '未出勤';
+  document.getElementById('selectedStaffState').textContent = isOnBreak ? '休憩中' : (isWorking ? '出勤中' : '未出勤');
   document.getElementById('btnClockIn').disabled = isWorking;
-  document.getElementById('btnClockOut').disabled = !isWorking;
+  document.getElementById('btnClockOut').disabled = !isWorking || isOnBreak;
+
+  document.getElementById('btnBreakStart').style.display = (isWorking && !isOnBreak) ? '' : 'none';
+  document.getElementById('btnBreakEnd').style.display = isOnBreak ? '' : 'none';
 }
 
 document.getElementById('btnClockIn').addEventListener('click', async () => {
@@ -652,7 +669,37 @@ document.getElementById('btnClockOut').addEventListener('click', async () => {
   const res = await apiPost('clockOut', { staffId: state.selectedStaffId });
   setButtonLoading(btn, false);
   if (res.success) {
-    showToast('退勤しました ' + res.time);
+    showToast(res.breakCheckFlag ? '退勤しました（休憩時間が法定基準に満たない可能性があります）' : '退勤しました ' + res.time);
+    await init();
+    selectStaff(state.selectedStaffId);
+  } else {
+    showToast(res.error || '失敗しました');
+  }
+});
+
+document.getElementById('btnBreakStart').addEventListener('click', async () => {
+  if (!state.selectedStaffId) return;
+  const btn = document.getElementById('btnBreakStart');
+  setButtonLoading(btn, true, '処理中…');
+  const res = await apiPost('breakStart', { staffId: state.selectedStaffId });
+  setButtonLoading(btn, false);
+  if (res.success) {
+    showToast('休憩に入りました ' + res.time);
+    await init();
+    selectStaff(state.selectedStaffId);
+  } else {
+    showToast(res.error || '失敗しました');
+  }
+});
+
+document.getElementById('btnBreakEnd').addEventListener('click', async () => {
+  if (!state.selectedStaffId) return;
+  const btn = document.getElementById('btnBreakEnd');
+  setButtonLoading(btn, true, '処理中…');
+  const res = await apiPost('breakEnd', { staffId: state.selectedStaffId });
+  setButtonLoading(btn, false);
+  if (res.success) {
+    showToast(`休憩から戻りました（${res.minutes}分）`);
     await init();
     selectStaff(state.selectedStaffId);
   } else {
@@ -724,6 +771,9 @@ window.openEditModal = function(el) {
   const badge = document.getElementById('editStatusBadge');
   badge.textContent = isApproved ? '承認済み（ロック中）' : (r['ステータス'] || '未承認');
   badge.className = 'badge ' + (isApproved ? 'approved' : 'pending');
+
+  const breakCheckBadge = document.getElementById('editBreakCheckBadge');
+  breakCheckBadge.style.display = (r['休憩要確認'] === true || r['休憩要確認'] === 'TRUE') ? '' : 'none';
 
   // 承認済みは編集不可（承認解除するまでロック）
   ['editIn', 'editOut', 'editBreak', 'editNote'].forEach(id => {
