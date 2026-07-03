@@ -282,6 +282,13 @@
     </div>
 
     <div class="card">
+      <h2>🔒 管理者PINの変更</h2>
+      <div class="field"><label>現在のPIN</label><input type="password" inputmode="numeric" id="cfgCurrentPin" placeholder="現在のPIN"></div>
+      <div class="field"><label>新しいPIN（4桁以上）</label><input type="password" inputmode="numeric" id="cfgNewPin" placeholder="新しいPIN"></div>
+      <button class="btn btn-secondary" id="btnChangePin">PINを変更</button>
+    </div>
+
+    <div class="card">
       <h2>スタッフマスタ</h2>
       <div id="staffList"></div>
       <button class="btn btn-secondary" id="btnAddStaff" style="margin-top:10px;">＋ スタッフを追加</button>
@@ -315,6 +322,7 @@
     </div>
     <div style="height:8px"></div>
     <button class="btn btn-secondary" id="btnApproveRecord">✓ 承認する</button>
+    <button class="btn btn-secondary" id="btnUnapproveRecord" style="display:none; border-color:var(--yellow); color:var(--yellow);">🔓 承認解除する（編集可能に戻す）</button>
   </div>
 </div>
 
@@ -393,12 +401,24 @@
   </div>
 </div>
 
+<!-- PIN入力モーダル -->
+<div class="modal-overlay" id="pinModal">
+  <div class="modal-sheet">
+    <h3>🔒 管理者PIN</h3>
+    <div class="field"><label>PINを入力してください</label><input type="password" inputmode="numeric" id="pinInput" placeholder="••••"></div>
+    <div class="row-flex">
+      <button class="btn btn-in" id="btnSubmitPin">開く</button>
+      <button class="btn btn-secondary" id="btnCancelPin">閉じる</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
 /* ============ 設定：GAS Web APIのデプロイURLと、設定シートのAPIキーに差し替えてください ============ */
 const API_URL = 'https://script.google.com/macros/s/AKfycbx18NvBWyUOGY829l4nnyaAKq1slZbXBfMNrDRoig9FNaqlWhdE8l-aOKXQsuq6wB1o/exec';
-const API_KEY = '5ba39bd4-25a1-4e97-b9e9-54adc892aeba'; // スプレッドシートの「設定」シート → APIキー の値をコピー
+const API_KEY = 'c1ea5e35-5972-4263-80c0-267e68d2ee6f'; // スプレッドシートの「設定」シート → APIキー の値をコピー
 
 let state = {
   staff: [],
@@ -483,15 +503,53 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 1800);
 }
 
-// ---------- タブ切り替え ----------
+// ---------- タブ切り替え（管理・設定タブはPINロック） ----------
+let unlockedThisSession = false;
+let pendingTabBtn = null;
+const LOCKED_TABS = ['admin', 'settings'];
+
 document.querySelectorAll('nav.tabbar button').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('nav.tabbar button').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('page-' + btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'admin') { loadAdminDate(); loadAlerts(); }
+    if (LOCKED_TABS.includes(btn.dataset.tab) && !unlockedThisSession) {
+      pendingTabBtn = btn;
+      document.getElementById('pinInput').value = '';
+      document.getElementById('pinModal').classList.add('open');
+      return;
+    }
+    switchToTab_(btn);
   });
+});
+
+function switchToTab_(btn) {
+  document.querySelectorAll('nav.tabbar button').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('page-' + btn.dataset.tab).classList.add('active');
+  if (btn.dataset.tab === 'admin') { loadAdminDate(); loadAlerts(); }
+}
+
+document.getElementById('btnCancelPin').addEventListener('click', () => {
+  pendingTabBtn = null;
+  document.getElementById('pinModal').classList.remove('open');
+});
+
+document.getElementById('btnSubmitPin').addEventListener('click', async () => {
+  const btn = document.getElementById('btnSubmitPin');
+  const pin = document.getElementById('pinInput').value;
+  setButtonLoading(btn, true, '確認中…');
+  const res = await apiPost('checkPin', { pin });
+  setButtonLoading(btn, false);
+  if (res.success) {
+    unlockedThisSession = true;
+    document.getElementById('pinModal').classList.remove('open');
+    if (pendingTabBtn) { switchToTab_(pendingTabBtn); pendingTabBtn = null; }
+  } else {
+    showToast(res.error || 'PINが違います');
+  }
+});
+
+document.getElementById('pinInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('btnSubmitPin').click();
 });
 
 // ---------- タップフィードバック（:active非対応端末向け） ----------
@@ -664,9 +722,16 @@ window.openEditModal = function(el) {
 
   const isApproved = r['ステータス'] === '承認済み';
   const badge = document.getElementById('editStatusBadge');
-  badge.textContent = r['ステータス'] || '未承認';
+  badge.textContent = isApproved ? '承認済み（ロック中）' : (r['ステータス'] || '未承認');
   badge.className = 'badge ' + (isApproved ? 'approved' : 'pending');
+
+  // 承認済みは編集不可（承認解除するまでロック）
+  ['editIn', 'editOut', 'editBreak', 'editNote'].forEach(id => {
+    document.getElementById(id).disabled = isApproved;
+  });
+  document.getElementById('btnSaveEdit').style.display = isApproved ? 'none' : '';
   document.getElementById('btnApproveRecord').style.display = isApproved ? 'none' : '';
+  document.getElementById('btnUnapproveRecord').style.display = isApproved ? '' : 'none';
 
   document.getElementById('editModal').classList.add('open');
 };
@@ -683,6 +748,22 @@ document.getElementById('btnApproveRecord').addEventListener('click', async () =
   setButtonLoading(btn, false);
   if (res.success) {
     showToast('承認しました');
+    document.getElementById('editModal').classList.remove('open');
+    loadAdminDate();
+  } else {
+    showToast(res.error || '失敗しました');
+  }
+});
+
+document.getElementById('btnUnapproveRecord').addEventListener('click', async () => {
+  if (!confirm('承認を解除して編集可能に戻しますか？')) return;
+  const btn = document.getElementById('btnUnapproveRecord');
+  const r = JSON.parse(document.getElementById('editModal').dataset.record);
+  setButtonLoading(btn, true, '解除中…');
+  const res = await apiPost('unapproveRecord', { id: r.ID });
+  setButtonLoading(btn, false);
+  if (res.success) {
+    showToast('承認を解除しました');
     document.getElementById('editModal').classList.remove('open');
     loadAdminDate();
   } else {
@@ -802,6 +883,23 @@ document.getElementById('btnSaveConfig').addEventListener('click', async () => {
   if (res.success) {
     showToast('設定を保存しました');
     init();
+  } else {
+    showToast(res.error || '失敗しました');
+  }
+});
+
+document.getElementById('btnChangePin').addEventListener('click', async () => {
+  const btn = document.getElementById('btnChangePin');
+  const currentPin = document.getElementById('cfgCurrentPin').value;
+  const newPin = document.getElementById('cfgNewPin').value;
+  if (!currentPin || !newPin) { showToast('現在のPINと新しいPINを入力してください'); return; }
+  setButtonLoading(btn, true, '変更中…');
+  const res = await apiPost('changePin', { currentPin, newPin });
+  setButtonLoading(btn, false);
+  if (res.success) {
+    showToast('PINを変更しました');
+    document.getElementById('cfgCurrentPin').value = '';
+    document.getElementById('cfgNewPin').value = '';
   } else {
     showToast(res.error || '失敗しました');
   }
