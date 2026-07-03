@@ -53,6 +53,11 @@
     -webkit-background-clip: text; background-clip: text; color: transparent;
   }
   header .sub { font-size: 12px; color: var(--text3); margin-top: 2px; }
+  .sync-wrap { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text3); margin-top: 4px; }
+  .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+  .sync-dot.syncing { background: var(--yellow); animation: pulse 1s infinite; }
+  .sync-dot.error { background: var(--red); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
 
   main { padding: 14px; max-width: 520px; margin: 0 auto; }
   .tab-page { display: none; }
@@ -132,6 +137,10 @@
   nav.tabbar button.btn-pressed, nav.tabbar button:active { transform: scale(0.88); opacity: 0.7; }
   nav.tabbar button .icon { font-size: 20px; }
   nav.tabbar button.active { color: var(--primary); font-weight: 700; }
+  .nav-badge {
+    display: inline-block; margin-left: 3px; background: var(--red); color: #fff;
+    font-size: 9px; font-weight: 700; border-radius: 10px; padding: 1px 5px; vertical-align: top;
+  }
 
   .modal-overlay {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 30;
@@ -162,6 +171,7 @@
 <header>
   <h1 id="storeName">タイムカード</h1>
   <div class="sub">出退勤の打刻管理</div>
+  <div class="sync-wrap"><div class="sync-dot" id="syncDot"></div><span id="syncLabel">同期済み</span></div>
 </header>
 
 <main>
@@ -196,6 +206,11 @@
 
   <!-- ==================== 管理タブ ==================== -->
   <section class="tab-page" id="page-admin">
+    <div class="card" id="alertCard" style="display:none; border-color: var(--yellow);">
+      <h2 style="color: var(--yellow);">⚠ 打刻漏れ</h2>
+      <div id="alertList"></div>
+    </div>
+
     <div class="card">
       <h2>日付で確認</h2>
       <div class="field">
@@ -207,7 +222,7 @@
     <div class="card">
       <h2>月次出力</h2>
       <div class="field">
-        <label>対象月</label>
+        <label>対象月（設定した締め日に応じた期間で集計されます）</label>
         <input type="month" id="summaryMonth">
       </div>
       <div class="row-flex">
@@ -215,6 +230,12 @@
         <button class="btn btn-secondary btn-small" id="btnExportCsv">CSV出力</button>
       </div>
       <div id="summaryList" style="margin-top:12px;"></div>
+    </div>
+
+    <div class="card">
+      <h2>有給休暇</h2>
+      <button class="btn btn-secondary btn-small" id="btnCheckLegalLeave" style="margin-bottom:10px;">法定基準を確認</button>
+      <div id="leaveList"></div>
     </div>
   </section>
 
@@ -224,6 +245,31 @@
       <h2>店舗設定</h2>
       <div class="field"><label>店舗名</label><input type="text" id="cfgStoreName"></div>
       <div class="field"><label>標準休憩分</label><input type="number" id="cfgBreakMin"></div>
+      <div class="field">
+        <label>給与計算の締め日（集計期間に反映されます）</label>
+        <select id="cfgClosingDay">
+          <option value="末日">末日締め（暦月そのまま集計）</option>
+          <option value="20">20日締め</option>
+          <option value="25">25日締め</option>
+          <option value="15">15日締め</option>
+          <option value="10">10日締め</option>
+          <option value="5">5日締め</option>
+        </select>
+      </div>
+      <div class="field"><label>給与支払日（記録用・保存期限の確認に使用）</label><input type="text" id="cfgPayDay" placeholder="例：翌月25日"></div>
+      <div class="field">
+        <label>法定休日（休日労働の判定に使用）</label>
+        <select id="cfgLegalHoliday">
+          <option value="日">日曜日</option>
+          <option value="月">月曜日</option>
+          <option value="火">火曜日</option>
+          <option value="水">水曜日</option>
+          <option value="木">木曜日</option>
+          <option value="金">金曜日</option>
+          <option value="土">土曜日</option>
+        </select>
+      </div>
+      <div class="field"><label>所定労働時間（分／時間外判定の基準）</label><input type="number" id="cfgStandardMin" placeholder="例：480（8時間）"></div>
       <div class="field">
         <label>Sales Manager連携</label>
         <select id="cfgLinkMode">
@@ -278,6 +324,25 @@
     <h3>スタッフ編集</h3>
     <div class="field"><label>氏名</label><input type="text" id="staffEditName"></div>
     <div class="field">
+      <label>性別</label>
+      <select id="staffEditGender">
+        <option value="男性">男性</option>
+        <option value="女性">女性</option>
+        <option value="その他">その他・未回答</option>
+      </select>
+    </div>
+    <div class="field"><label>入社日（有給の法定付与計算に使用）</label><input type="date" id="staffEditHireDate"></div>
+    <div class="field">
+      <label>週所定労働日数（有給の比例付与判定に使用）</label>
+      <select id="staffEditWeeklyDays">
+        <option value="5">5日以上（通常付与）</option>
+        <option value="4">4日</option>
+        <option value="3">3日</option>
+        <option value="2">2日</option>
+        <option value="1">1日</option>
+      </select>
+    </div>
+    <div class="field">
       <label>雇用形態</label>
       <select id="staffEditType" onchange="syncStaffTypeFields()">
         <option value="アルバイト">アルバイト</option>
@@ -305,11 +370,35 @@
   </div>
 </div>
 
+<!-- 有給休暇モーダル -->
+<div class="modal-overlay" id="leaveModal">
+  <div class="modal-sheet">
+    <h3>有給休暇</h3>
+    <div class="field"><label>氏名</label><div id="leaveStaffName" style="font-weight:700;"></div></div>
+    <div class="field"><label>現在の残日数</label><div id="leaveBalanceDisplay" style="font-weight:700; font-size:20px;">-</div></div>
+    <div class="field">
+      <label>操作</label>
+      <select id="leaveActionType">
+        <option value="grant">付与する</option>
+        <option value="use">消化する（取得日を記録）</option>
+      </select>
+    </div>
+    <div class="field" id="leaveDateField" style="display:none;"><label>取得日</label><input type="date" id="leaveDate"></div>
+    <div class="field"><label>日数（0.5＝半休）</label><input type="number" step="0.5" id="leaveDays" value="1"></div>
+    <div class="field"><label>備考</label><input type="text" id="leaveNote" placeholder="任意"></div>
+    <div class="row-flex">
+      <button class="btn btn-in" id="btnSaveLeave">記録する</button>
+      <button class="btn btn-secondary" id="btnCancelLeave">閉じる</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
-/* ============ 設定：GAS Web APIのデプロイURLに差し替えてください ============ */
+/* ============ 設定：GAS Web APIのデプロイURLと、設定シートのAPIキーに差し替えてください ============ */
 const API_URL = 'https://script.google.com/macros/s/AKfycbx18NvBWyUOGY829l4nnyaAKq1slZbXBfMNrDRoig9FNaqlWhdE8l-aOKXQsuq6wB1o/exec';
+const API_KEY = '5ba39bd4-25a1-4e97-b9e9-54adc892aeba'; // スプレッドシートの「設定」シート → APIキー の値をコピー
 
 let state = {
   staff: [],
@@ -330,25 +419,43 @@ function hideLoadingBar() {
   if (pendingRequests === 0) document.getElementById('loadingBar').classList.remove('active');
 }
 
+function setSyncing(st) {
+  const d = document.getElementById('syncDot'), l = document.getElementById('syncLabel');
+  if (!d || !l) return;
+  if (st === 'syncing') { d.className = 'sync-dot syncing'; l.textContent = '同期中…'; }
+  else if (st === 'error') { d.className = 'sync-dot error'; l.textContent = 'エラー'; }
+  else { d.className = 'sync-dot'; l.textContent = '同期済み'; }
+}
+
 async function apiGet(action, params = {}) {
-  showLoadingBar();
+  showLoadingBar(); setSyncing('syncing');
   try {
-    const qs = new URLSearchParams({ action, ...params }).toString();
+    const qs = new URLSearchParams({ action, key: API_KEY, ...params }).toString();
     const res = await fetch(`${API_URL}?${qs}`);
-    return await res.json();
+    const json = await res.json();
+    setSyncing(json && json.success === false ? 'error' : 'ok');
+    return json;
+  } catch (err) {
+    setSyncing('error');
+    throw err;
   } finally {
     hideLoadingBar();
   }
 }
 async function apiPost(action, payload = {}) {
-  showLoadingBar();
+  showLoadingBar(); setSyncing('syncing');
   try {
     const res = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, ...payload })
+      body: JSON.stringify({ action, key: API_KEY, ...payload })
     });
-    return await res.json();
+    const json = await res.json();
+    setSyncing(json && json.success === false ? 'error' : 'ok');
+    return json;
+  } catch (err) {
+    setSyncing('error');
+    throw err;
   } finally {
     hideLoadingBar();
   }
@@ -383,7 +490,7 @@ document.querySelectorAll('nav.tabbar button').forEach(btn => {
     document.querySelectorAll('.tab-page').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('page-' + btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'admin') loadAdminDate();
+    if (btn.dataset.tab === 'admin') { loadAdminDate(); loadAlerts(); }
   });
 });
 
@@ -419,12 +526,21 @@ async function init() {
   state.staff = data.staff || [];
   state.config = data.config || {};
   state.todayLog = data.todayLog || [];
+  state.leaveBalances = data.leaveBalances || {};
 
   document.getElementById('storeName').textContent = state.config['店舗名'] || 'タイムカード';
   renderStaffGrid();
   renderTodayList();
   fillConfigForm();
   renderStaffList();
+  renderLeaveList();
+
+  const navAdminBtn = document.querySelector('nav.tabbar button[data-tab="admin"]');
+  if (navAdminBtn) {
+    navAdminBtn.innerHTML = (data.alertCount > 0)
+      ? `<span class="icon">📋</span>管理<span class="nav-badge">${data.alertCount}</span>`
+      : `<span class="icon">📋</span>管理`;
+  }
 }
 
 // ---------- 打刻タブ ----------
@@ -520,6 +636,23 @@ async function loadAdminDate() {
   `).join('');
 }
 
+async function loadAlerts() {
+  const data = await apiGet('getAlerts');
+  const card = document.getElementById('alertCard');
+  const wrap = document.getElementById('alertList');
+  if (!data.success || data.records.length === 0) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  wrap.innerHTML = data.records.map(r => `
+    <div class="record-row tappable" data-record='${JSON.stringify(r).replace(/'/g, "&apos;")}' onclick="openEditModal(this)" style="cursor:pointer;">
+      <span class="rname">${r['氏名']}<br><span class="rtime">${r['日付']}　出勤 ${r['出勤時刻']}・退勤未記録</span></span>
+      <span class="badge pending">要確認</span>
+    </div>
+  `).join('');
+}
+
 window.openEditModal = function(el) {
   const r = JSON.parse(el.dataset.record.replace(/&apos;/g, "'"));
   document.getElementById('editModal').dataset.record = JSON.stringify(r);
@@ -583,7 +716,7 @@ document.getElementById('btnAggregate').addEventListener('click', async () => {
   const res = await apiPost('aggregateMonth', { month });
   setButtonLoading(btn, false);
   if (res.success) {
-    showToast(`${res.staffCount}名分を集計しました`);
+    showToast(`${res.label || month}：${res.staffCount}名分を集計しました`);
     loadSummary(month);
   } else {
     showToast(res.error || '失敗しました');
@@ -599,11 +732,15 @@ async function loadSummary(month) {
   }
   wrap.innerHTML = data.records.map(r => `
     <div class="record-row">
-      <span class="rname">${r['氏名']}<br><span class="rtime">${r['出勤日数']}日 / ${Math.round(r['総労働時間_分']/60*10)/10}h</span></span>
+      <span class="rname">${r['氏名']}（${r['性別'] || '-'}）<br><span class="rtime">
+        出勤${r['出勤日数']}日 / 労働${minToH_(r['労働時間数_分'])}h<br>
+        深夜${minToH_(r['深夜労働時間_分'])}h・時間外${minToH_(r['時間外労働時間_分'])}h・休日${minToH_(r['休日労働時間_分'])}h
+      </span></span>
       <span class="rtime">基本給¥${r['基本給']}<br>交通費¥${r['交通費合計']}<br><b>計¥${r['支給総額']}</b></span>
     </div>
   `).join('');
 }
+function minToH_(min) { return Math.round((Number(min) || 0) / 60 * 10) / 10; }
 
 document.getElementById('btnExportCsv').addEventListener('click', async () => {
   const month = document.getElementById('summaryMonth').value;
@@ -612,12 +749,17 @@ document.getElementById('btnExportCsv').addEventListener('click', async () => {
     showToast('出力するデータがありません');
     return;
   }
-  // 給与計算ソフト向けフォーマット
-  const header = ['スタッフ名', '出勤日数', '合計労働時間', '基本給', '交通費合計', '支給総額'];
+  // 賃金台帳準拠フォーマット（社労士・税理士向け）
+  const header = ['氏名', '性別', '賃金計算期間', '労働日数', '労働時間数', '時間外労働時間数', '休日労働時間数', '深夜労働時間数', '基本給', '交通費合計', '支給総額'];
   const rows = data.records.map(r => [
     r['氏名'],
+    r['性別'] || '',
+    month,
     r['出勤日数'],
-    Math.round(r['総労働時間_分'] / 60 * 100) / 100,
+    minToH_(r['労働時間数_分']),
+    minToH_(r['時間外労働時間_分']),
+    minToH_(r['休日労働時間_分']),
+    minToH_(r['深夜労働時間_分']),
     r['基本給'],
     r['交通費合計'],
     r['支給総額'],
@@ -634,6 +776,10 @@ document.getElementById('btnExportCsv').addEventListener('click', async () => {
 function fillConfigForm() {
   document.getElementById('cfgStoreName').value = state.config['店舗名'] || '';
   document.getElementById('cfgBreakMin').value = state.config['標準休憩分'] || 60;
+  document.getElementById('cfgClosingDay').value = state.config['締め日'] || '末日';
+  document.getElementById('cfgPayDay').value = state.config['支払日'] || '';
+  document.getElementById('cfgLegalHoliday').value = state.config['法定休日'] || '日';
+  document.getElementById('cfgStandardMin').value = state.config['所定労働時間_分'] || 480;
   document.getElementById('cfgLinkMode').value = state.config['勤怠連携モード'] || 'standalone';
   document.getElementById('cfgLinkUrl').value = state.config['連携GAS_URL'] || '';
 }
@@ -643,6 +789,10 @@ document.getElementById('btnSaveConfig').addEventListener('click', async () => {
   const config = {
     '店舗名': document.getElementById('cfgStoreName').value,
     '標準休憩分': document.getElementById('cfgBreakMin').value,
+    '締め日': document.getElementById('cfgClosingDay').value,
+    '支払日': document.getElementById('cfgPayDay').value,
+    '法定休日': document.getElementById('cfgLegalHoliday').value,
+    '所定労働時間_分': document.getElementById('cfgStandardMin').value,
     '勤怠連携モード': document.getElementById('cfgLinkMode').value,
     '連携GAS_URL': document.getElementById('cfgLinkUrl').value,
   };
@@ -671,7 +821,7 @@ function renderStaffList() {
       : `交通費¥${s['交通費'] || 0}（日額）`;
     return `
     <div class="record-row tappable" data-staff-id="${s['ID']}" onclick="openStaffModal(this)" style="cursor:pointer;">
-      <span class="rname">${s['氏名']}</span>
+      <span class="rname">${s['氏名']}（${s['性別'] || '-'}）</span>
       <span class="rtime">${s['雇用形態']}・${wage}・${transport}</span>
     </div>
   `;
@@ -696,6 +846,9 @@ window.openStaffModal = function(el) {
   const s = state.staff.find(x => x['ID'] === staffId) || {};
   state.editingStaffId = staffId || null;
   document.getElementById('staffEditName').value = s['氏名'] || '';
+  document.getElementById('staffEditGender').value = s['性別'] || '男性';
+  document.getElementById('staffEditHireDate').value = s['入社日'] || '';
+  document.getElementById('staffEditWeeklyDays').value = s['週所定労働日数'] || 5;
   document.getElementById('staffEditType').value = s['雇用形態'] || 'アルバイト';
   document.getElementById('staffEditHourly').value = s['時給'] || '';
   document.getElementById('staffEditMonthly').value = s['月給'] || '';
@@ -712,6 +865,9 @@ window.openStaffModal = function(el) {
 document.getElementById('btnAddStaff').addEventListener('click', () => {
   state.editingStaffId = null;
   document.getElementById('staffEditName').value = '';
+  document.getElementById('staffEditGender').value = '男性';
+  document.getElementById('staffEditHireDate').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('staffEditWeeklyDays').value = 5;
   document.getElementById('staffEditType').value = 'アルバイト';
   document.getElementById('staffEditHourly').value = '';
   document.getElementById('staffEditMonthly').value = '';
@@ -730,6 +886,9 @@ document.getElementById('btnSaveStaff').addEventListener('click', async () => {
   const staff = {
     'ID': state.editingStaffId || '',
     '氏名': document.getElementById('staffEditName').value,
+    '性別': document.getElementById('staffEditGender').value,
+    '入社日': document.getElementById('staffEditHireDate').value,
+    '週所定労働日数': document.getElementById('staffEditWeeklyDays').value,
     '雇用形態': document.getElementById('staffEditType').value,
     '時給': document.getElementById('staffEditHourly').value,
     '月給': document.getElementById('staffEditMonthly').value,
@@ -760,6 +919,114 @@ document.getElementById('btnDeleteStaff').addEventListener('click', async () => 
   if (res.success) {
     showToast('削除しました');
     document.getElementById('staffModal').classList.remove('open');
+    init();
+  } else {
+    showToast(res.error || '失敗しました');
+  }
+});
+
+// ---------- 有給休暇 ----------
+function renderLeaveList() {
+  const wrap = document.getElementById('leaveList');
+  if (!state.staff || state.staff.length === 0) {
+    wrap.innerHTML = '<div class="empty-state">スタッフが登録されていません</div>';
+    return;
+  }
+  wrap.innerHTML = state.staff.map(s => {
+    const bal = (state.leaveBalances && state.leaveBalances[s['ID']]) ? state.leaveBalances[s['ID']].balance : 0;
+    const legal = state.legalLeaveResults ? state.legalLeaveResults.find(r => r.staffId === s['ID']) : null;
+
+    let legalHtml = '';
+    if (legal && legal.eligible && legal.shortfall > 0) {
+      legalHtml = `
+        <div class="rtime" style="color:var(--yellow); margin-top:4px;">
+          法定基準：${legal.legalTotalDays}日（${legal.baseDate}時点）／不足 ${legal.shortfall}日
+          ${legal.attendanceNote ? `<br>${legal.attendanceNote}（出勤率概算 ${legal.attendanceRatePct}%）` : ''}
+        </div>
+        <button class="btn btn-in btn-small" style="margin-top:6px;" onclick="event.stopPropagation(); quickGrantLegal('${s['ID']}', ${legal.shortfall})">法定通り ${legal.shortfall}日 付与する</button>
+      `;
+    } else if (legal && !legal.eligible) {
+      legalHtml = `<div class="rtime" style="margin-top:4px;">${legal.reason}</div>`;
+    }
+
+    return `
+    <div class="record-row tappable" data-staff-id="${s['ID']}" onclick="openLeaveModal(this)" style="cursor:pointer; display:block;">
+      <div style="display:flex; justify-content:space-between;">
+        <span class="rname">${s['氏名']}</span>
+        <span class="rtime">残 ${bal} 日</span>
+      </div>
+      ${legalHtml}
+    </div>
+  `;
+  }).join('');
+}
+
+document.getElementById('btnCheckLegalLeave').addEventListener('click', async () => {
+  const btn = document.getElementById('btnCheckLegalLeave');
+  setButtonLoading(btn, true, '確認中…');
+  const res = await apiGet('checkLegalLeave');
+  setButtonLoading(btn, false);
+  if (res.success) {
+    state.legalLeaveResults = res.results;
+    renderLeaveList();
+    const shortfallCount = res.results.filter(r => r.eligible && r.shortfall > 0).length;
+    showToast(shortfallCount > 0 ? `${shortfallCount}名に付与不足の可能性があります` : '全員、法定基準を満たしています');
+  } else {
+    showToast(res.error || '確認に失敗しました');
+  }
+});
+
+window.quickGrantLegal = async function(staffId, days) {
+  const res = await apiPost('grantLeave', { staffId, days, note: '法定基準に基づく自動計算付与' });
+  if (res.success) {
+    showToast('付与しました');
+    init();
+  } else {
+    showToast(res.error || '失敗しました');
+  }
+};
+
+window.openLeaveModal = function(el) {
+  const staffId = el.dataset.staffId;
+  const s = state.staff.find(x => x['ID'] === staffId) || {};
+  const bal = (state.leaveBalances && state.leaveBalances[staffId]) ? state.leaveBalances[staffId].balance : 0;
+  document.getElementById('leaveModal').dataset.staffId = staffId;
+  document.getElementById('leaveStaffName').textContent = s['氏名'] || '';
+  document.getElementById('leaveBalanceDisplay').textContent = bal + ' 日';
+  document.getElementById('leaveActionType').value = 'grant';
+  document.getElementById('leaveDate').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('leaveDays').value = 1;
+  document.getElementById('leaveNote').value = '';
+  syncLeaveFields();
+  document.getElementById('leaveModal').classList.add('open');
+};
+
+function syncLeaveFields() {
+  const isUse = document.getElementById('leaveActionType').value === 'use';
+  document.getElementById('leaveDateField').style.display = isUse ? '' : 'none';
+}
+document.getElementById('leaveActionType').addEventListener('change', syncLeaveFields);
+
+document.getElementById('btnCancelLeave').addEventListener('click', () => {
+  document.getElementById('leaveModal').classList.remove('open');
+});
+
+document.getElementById('btnSaveLeave').addEventListener('click', async () => {
+  const btn = document.getElementById('btnSaveLeave');
+  const staffId = document.getElementById('leaveModal').dataset.staffId;
+  const actionType = document.getElementById('leaveActionType').value;
+  const days = document.getElementById('leaveDays').value;
+  const note = document.getElementById('leaveNote').value;
+  const date = document.getElementById('leaveDate').value;
+
+  setButtonLoading(btn, true, '記録中…');
+  const res = await apiPost(actionType === 'grant' ? 'grantLeave' : 'useLeave', {
+    staffId, days, note, date
+  });
+  setButtonLoading(btn, false);
+  if (res.success) {
+    showToast('記録しました');
+    document.getElementById('leaveModal').classList.remove('open');
     init();
   } else {
     showToast(res.error || '失敗しました');
